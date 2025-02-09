@@ -6,10 +6,10 @@ import morgan from "morgan";
 import helmet from "helmet";
 import ApiResponse from "./utils/ApiResponse.js";
 import { HttpStatus } from "./constants/status.code.js";
- 
+
 const app = express();
- 
- 
+
+
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -19,7 +19,7 @@ app.use(helmet({
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
     noSniff: true,
 }));
- 
+
 const allowedOrigins = process.env.CORS_ORIGIN?.split(",") || ["http://localhost:5173"];
 app.use(cors({
     origin: allowedOrigins,
@@ -27,16 +27,16 @@ app.use(cors({
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
 }));
- 
+
 app.use(morgan("dev"));
- 
+
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use(express.static("public"));
 app.use(cookieParser());
- 
+
 app.use(passport.initialize());
- 
+
 import userRoutes from "./routes/user.routes.js";
 import googleRoutes from "./routes/google.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -46,7 +46,8 @@ import cartRoutes from "./routes/cart.routes.js";
 import authMiddleware from "./middlewares/auth.middleware.js";
 import couponRoutes from "./routes/coupon.routes.js";
 import orderRoutes from "./routes/order.routes.js";
- 
+import wishlistRoutes from "./routes/wishlist.routes.js";
+
 app.use("/auth", googleRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/admin", adminRoutes);
@@ -55,15 +56,16 @@ app.use("/api/v1/address", authMiddleware, addressRoutes);
 app.use("/api/v1/cart", authMiddleware, cartRoutes);
 app.use("/api/v1/coupon", authMiddleware, couponRoutes);
 app.use("/api/v1/order", authMiddleware, orderRoutes);
- 
+app.use("/api/v1/wishlist", authMiddleware, wishlistRoutes);
+
 app.get("/", (req, res) => {
     res.status(HttpStatus.OK.code).json(new ApiResponse(HttpStatus.OK.code, [], "We'll live soon! Stay tuned!"));
 });
- 
+
 app.use((req, res) => {
     res.status(HttpStatus.NOT_FOUND.code).json({ message: "404 No Page Found" });
 });
- 
+
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json({
@@ -71,5 +73,5 @@ app.use((err, req, res, next) => {
         error: process.env.NODE_ENV === "development" ? err.message : undefined
     });
 });
- 
+
 export default app;

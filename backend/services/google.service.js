@@ -1,53 +1,45 @@
-import passport from "passport";
-import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import { User } from "../models/user.model.js";
-import { generateAccessAndRefereshTokens } from "../controllers/user.controller.js";
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import {User} from '../models/user.model.js';
+import { generateAccessAndRefereshTokens } from '../controllers/user.controller.js';
 import dotenv from "dotenv";
 dotenv.config();
 
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: process.env.GOOGLE_CALLBACK_URL,
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      try {
-        let user = await User.findOne({ googleId: profile.id });
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: process.env.GOOGLE_CALLBACK_URL,
+},
+async (accessToken, refreshToken, profile, done) => {
+  try {
+    let user = await User.findOne({ googleId: profile.id });
 
-        if (!user) {
-          user = await User.findOne({ email: profile.emails[0].value });
-
-          if (user) {
-            user.googleId = profile.id;
-            user.avatar = profile.photos[0]?.value;
-            await user.save();
-          } else {
-            user = await User.create({
-              googleId: profile.id,
-              email: profile.emails[0].value,
-              fullName: profile.displayName,
-              avatar: profile.photos[0]?.value,
-              role: "customer",
-            });
-          }
-        }
-
-        const { accessToken: userAccessToken, refreshToken: userRefreshToken } =
-          await generateAccessAndRefereshTokens(user._id);
-
-        return done(null, {
-          user,
-          accessToken: userAccessToken,
-          refreshToken: userRefreshToken,
+    if (!user) {
+      user = await User.findOne({ email: profile.emails[0].value });
+      
+      if (user) {
+        user.googleId = profile.id;
+        user.avatar = profile.photos[0]?.value;
+        await user.save();
+      } else {
+        user = await User.create({
+          googleId: profile.id,
+          email: profile.emails[0].value,
+          fullName: profile.displayName,
+          avatar: profile.photos[0]?.value,
+          role: 'customer',
         });
-      } catch (error) {
-        return done(error, false);
       }
     }
-  )
-);
+
+    const { accessToken: userAccessToken, refreshToken: userRefreshToken } = await generateAccessAndRefereshTokens(user._id);
+
+    return done(null, { user, accessToken: userAccessToken, refreshToken: userRefreshToken });
+  } catch (error) {
+    return done(error, false);
+  }
+}
+));
 passport.serializeUser((user, done) => {
   done(null, user.id);
 });
