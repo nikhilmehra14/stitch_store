@@ -10,8 +10,19 @@ import { uploadOnCloudinary } from "../services/cloudinary.service.js";
 export const addProduct = async (req, res) => {
   try {
     const { product_name, sku, category, description, price, stock } = req.body;
-    if (!product_name || !sku || !category || !description || !price || !stock) {
-      return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "All fields are required"));
+    if (
+      !product_name ||
+      !sku ||
+      !category ||
+      !description ||
+      !price ||
+      !stock
+    ) {
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(
+          new ApiError(HttpStatus.BAD_REQUEST.code, "All fields are required")
+        );
     }
 
     const imageUrls = [];
@@ -24,7 +35,14 @@ export const addProduct = async (req, res) => {
 
     const existingProduct = await Product.findOne({ sku });
     if (existingProduct) {
-      return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Product with this SKU already exists"));
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(
+          new ApiError(
+            HttpStatus.BAD_REQUEST.code,
+            "Product with this SKU already exists"
+          )
+        );
     }
 
     const newProduct = new Product({
@@ -38,23 +56,54 @@ export const addProduct = async (req, res) => {
     });
 
     const savedProduct = await newProduct.save();
-    res.status(HttpStatus.CREATED.code).json(new ApiResponse(HttpStatus.CREATED.code, savedProduct, "Product added successfully"));
+    res
+      .status(HttpStatus.CREATED.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.CREATED.code,
+          savedProduct,
+          "Product added successfully"
+        )
+      );
   } catch (error) {
     console.error("Error adding product:", error);
-    res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while adding product", error.message));
+    res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while adding product",
+          error.message
+        )
+      );
   }
 };
-
 
 export const getProducts = async (req, res) => {
   try {
     const { category } = req.query;
     const filter = category ? { category } : {};
     const products = await Product.find(filter);
-    res.status(HttpStatus.OK.code).json(new ApiResponse(HttpStatus.OK.code, products, "Products Fetched Successfully"));
+    res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          products,
+          "Products Fetched Successfully"
+        )
+      );
   } catch (error) {
     console.error("Error fetching products:", error);
-    res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while fetching products details", error.message));
+    res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while fetching products details",
+          error.message
+        )
+      );
   }
 };
 
@@ -64,13 +113,31 @@ export const getProductById = async (req, res) => {
     const product = await Product.findById(id);
 
     if (!product) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(new ApiError(HttpStatus.NOT_FOUND.code, "Product not found"));
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Product not found"));
     }
 
-    res.status(HttpStatus.OK.code).json(new ApiResponse(HttpStatus.OK.code, product, "Product details fetched successfully"));
+    res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          product,
+          "Product details fetched successfully"
+        )
+      );
   } catch (error) {
     console.error("Error fetching product:", error);
-    res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while fetching product details", error.message));
+    res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while fetching product details",
+          error.message
+        )
+      );
   }
 };
 
@@ -151,7 +218,6 @@ export const updateProduct = async (req, res) => {
   }
 };
 
-
 export const deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
@@ -181,7 +247,11 @@ export const deleteProduct = async (req, res) => {
     return res
       .status(HttpStatus.OK.code)
       .json(
-        new ApiResponse(HttpStatus.OK.code, product, "Product deleted successfully")
+        new ApiResponse(
+          HttpStatus.OK.code,
+          product,
+          "Product deleted successfully"
+        )
       );
   } catch (error) {
     console.error("Error deleting product:", error);
