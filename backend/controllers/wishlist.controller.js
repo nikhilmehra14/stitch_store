@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { HttpStatus } from "../constants/status.code.js";
 import { Product } from "../models/product.model.js";
 import { Wishlist } from "../models/wishlist.model.js";
@@ -55,6 +56,9 @@ export const removeFromWishlist = async (req, res) => {
     const userId = req.user?._id;
 
     try {
+        if(!mongoose.Types.ObjectId.isValid(productId)){
+            return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid Product Id"))
+        }
         const wishlist = await Wishlist.findOne({ userId });
 
         if (!wishlist) {
@@ -63,7 +67,11 @@ export const removeFromWishlist = async (req, res) => {
             );
         }
 
-        const itemIndex = wishlist.items.findIndex(item => item.productId.toString() === productId);
+        const productObjectId = new mongoose.Types.ObjectId(productId);
+
+        const itemIndex = wishlist.items.findIndex(
+            (item) => item.productId.toString() === productObjectId.toString()
+        );
 
         if (itemIndex === -1) {
             return res.status(HttpStatus.NOT_FOUND.code).json(
@@ -90,13 +98,6 @@ export const viewWishlist = async (req, res) => {
 
     try {
         const wishlist = await Wishlist.findOne({ userId }).populate('items.productId');
-
-        if (!wishlist) {
-            return res.status(HttpStatus.NOT_FOUND.code).json(
-                new ApiError(HttpStatus.NOT_FOUND.code, "Wishlist not found")
-            );
-        }
-
         return res.status(HttpStatus.OK.code).json(
             new ApiResponse(HttpStatus.OK.code, wishlist, "Wishlist retrieved successfully")
         );

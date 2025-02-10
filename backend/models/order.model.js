@@ -15,6 +15,14 @@ const orderItemSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
+  product_name: {
+    type: String,
+    required: true,
+  },
+  sku: {
+    type: String,
+    required: true,
+  },
 });
 
 const orderSchema = new mongoose.Schema(
@@ -74,6 +82,14 @@ const orderSchema = new mongoose.Schema(
     currency: {
       type: String,
       default: "INR",
+    },
+    shiprocketOrderId: {
+      type: String,
+      default: null,
+    },
+    shippingLabel: {
+      type: String,
+      default: null,
     },
   },
   { timestamps: true }

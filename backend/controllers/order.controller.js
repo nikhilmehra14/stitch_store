@@ -5,6 +5,15 @@ import ApiError from "../utils/ApiError.js";
 import { HttpStatus } from "../constants/status.code.js";
 import Razorpay from "razorpay";
 import { createShiprocketOrder, generateShippingLabel, trackShiprocketOrder } from "../services/shiprocket.service.js";
+import mongoose from "mongoose";
+import sendEmail from "../services/email.service.js";
+import { verifyPayment } from "../services/payment.service.js";
+
+const ORDER_STATUS = {
+  PENDING_PAYMENT: "Pending Payment",
+  PAID: "Paid",
+  SHIPPED: "Shipped",
+};
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -12,9 +21,12 @@ const razorpay = new Razorpay({
 });
 
 export const createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { orderItems, shippingAddress, paymentMethod } = req.body;
-    const userId = req.user._id;
+    const userId = req.user?._id;
 
     if (!["razorpay", "upi"].includes(paymentMethod)) {
       return res
@@ -24,11 +36,12 @@ export const createOrder = async (req, res) => {
 
     let totalAmount = 0;
     for (const item of orderItems) {
-      const product = await Product.findById(item.product);
+      const product = await Product.findById(item.product).session(session);
       if (!product) {
-        return res
-          .status(HttpStatus.NOT_FOUND.code)
-          .json(new ApiError(HttpStatus.NOT_FOUND.code, `Product with ID ${item.product} not found`));
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(HttpStatus.NOT_FOUND.code)
+          .json({ message: `Product ${item.product} not found` });
       }
       totalAmount += product.price * item.quantity;
     }
@@ -49,77 +62,127 @@ export const createOrder = async (req, res) => {
       shippingAddress,
       paymentMethod,
       razorpayOrderId: razorpayOrder.id,
+      status: ORDER_STATUS.PENDING_PAYMENT,
     });
 
-    await order.save();
+    await order.save({ session });
 
-    // Prepare order details for Shiprocket
-    const shiprocketOrderDetails = {
-      order_id: order._id.toString(),
-      order_date: new Date().toISOString(),
-      pickup_location: "Primary",
-      channel_id: "",
-      comment: `Order created via ${process.env.EMAIL_SUPPORT}`,
-      billing_customer_name: shippingAddress.name,
-      billing_last_name: "",
-      billing_address: shippingAddress.addressLine1,
-      billing_address_2: shippingAddress.addressLine2,
-      billing_city: shippingAddress.city,
-      billing_pincode: shippingAddress.zipCode,
-      billing_state: shippingAddress.state,
-      billing_country: shippingAddress.country,
-      billing_email: process.env.EMAIL_SUPPORT,
-      billing_phone: shippingAddress.phone,
-      shipping_is_billing: true,
-      shipping_customer_name: shippingAddress.name,
-      shipping_last_name: "",
-      shipping_address: shippingAddress.addressLine1,
-      shipping_address_2: shippingAddress.addressLine2,
-      shipping_city: shippingAddress.city,
-      shipping_pincode: shippingAddress.zipCode,
-      shipping_country: shippingAddress.country,
-      shipping_phone: shippingAddress.phone,
-      order_items: orderItems.map((item) => ({
-        name: item.name,
-        sku: item.product.toString(),
-        units: item.quantity,
-        selling_price: item.price,
-      })),
-      payment_method: "Prepaid", // or "COD"
-      shipping_charges: 0, // Add shipping charges if applicable
-      total_discount: 0, // Add discount if applicable
-      sub_total: totalAmount,
-      length: 10, // Dimensions of the package
-      breadth: 10,
-      height: 10,
-      weight: 1, // Weight of the package in kg
-    };
+    await session.commitTransaction();
+    session.endSession();
 
-    const shiprocketOrder = await createShiprocketOrder(shiprocketOrderDetails);
 
-    const shippingLabel = await generateShippingLabel(shiprocketOrder.order_id);
-
-    order.shiprocketOrderId = shiprocketOrder.order_id;
-    order.shippingLabel = shippingLabel.label_url;
-    await order.save();
-
-    return res.status(HttpStatus.CREATED.code).json(
-      new ApiResponse(HttpStatus.CREATED.code, {
-        orderId: order.id,
-        razorpayOrderId: razorpayOrder.id,
-        amount: totalAmount,
-        currency: "INR",
-        key_id: razorpay.key_id,
-        shiprocketOrderId: shiprocketOrder.order_id,
-        shippingLabel: shippingLabel.label_url,
-      }, "Order created and shipping label generated successfully")
-    );
+    return res.status(HttpStatus.CREATED.code).json({
+      orderId: order.id,
+      razorpayOrderId: razorpayOrder.id,
+      amount: totalAmount,
+      currency: "INR",
+      message: "Order created. Awaiting payment.",
+    });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
     return res
       .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
       .json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while creating order", error.message));
   }
 };
+
+export const confirmOrder = async (req, res) => {
+  const { razorpayPaymentId, razorpayOrderId, razorpaySignature, orderId } = req.body;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const paymentVerificationResponse = await verifyPayment(req, res);
+
+    if (paymentVerificationResponse.status !== HttpStatus.OK.code) {
+      await session.abortTransaction();
+      session.endSession();
+      return paymentVerificationResponse;
+    }
+
+    const order = await Order.findById(orderId).session(session);
+    if (!order || order.paymentStatus !== "Pending") {
+      await session.abortTransaction();
+      session.endSession();
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid or already confirmed order."));
+    }
+
+    order.paymentStatus = "Completed";
+    order.orderStatus = "Processing";
+    order.razorpayPaymentId = razorpayPaymentId;
+    order.amountPaid = order.totalAmount;
+    await order.save({ session });
+
+    const orderConfirmationHTML = `
+      <p>Hi ${order.shippingAddress.name},</p>
+      <p>Your order <strong>#${order._id}</strong> has been successfully placed.</p>
+    `;
+
+    sendEmail(
+      order.shippingAddress.email,
+      "Order Placed Successfully",
+      `Your order #${order._id} has been placed successfully.`,
+      orderConfirmationHTML
+    );
+
+    const shiprocketOrder = await createShiprocketOrder(order);
+    const shippingLabel = await generateShippingLabel(shiprocketOrder.order_id);
+
+    order.shiprocketOrderId = shiprocketOrder.order_id;
+    order.shippingLabel = shippingLabel.label_url;
+    order.orderStatus = "Shipped";
+    await order.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    const orderShippedHTML = `
+      <p>Your order <strong>#${order._id}</strong> has been shipped.</p>
+      <p>Track your order <a href="https://shiprocket.co/tracking/${shiprocketOrder.shipment_id}">here</a>.</p>
+    `;
+
+    sendEmail(
+      order.shippingAddress.email,
+      "Order Shipped",
+      `Your order #${order._id} has been shipped.`,
+      orderShippedHTML
+    );
+
+    logger.info(`Order shipped successfully: ${order._id}`);
+
+    return res
+      .status(HttpStatus.OK.code)
+      .json(new ApiResponse(HttpStatus.OK.code, [], "Order confirmed & shipped."));
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
+
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminNotificationHTML = `
+      <p>Shiprocket API failed for order <strong>#${order._id}</strong>.</p>
+      <p>Error: ${error.message}</p>
+    `;
+
+    sendEmail(
+      adminEmail,
+      "Shiprocket API Failure",
+      "Shiprocket API failed for an order.",
+      adminNotificationHTML
+    );
+
+    return res
+      .status(HttpStatus.OK.code)
+      .json(new ApiError(HttpStatus.OK.code, "Order confirmed, but shipment failed. Admin notified.", error.message));
+  }
+};
+
 
 export const getAllOrders = async (req, res) => {
   try {

@@ -8,34 +8,34 @@ export const updateCart = async (userId, productId, quantity) => {
   const product = await Product.findById(productId);
 
   if (!product) {
-      throw new ApiError(HttpStatus.NOT_FOUND.code, "Product not found");
+    throw new ApiError(HttpStatus.NOT_FOUND.code, "Product not found");
   }
 
   if (quantity > product.stock) {
-      throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
+    throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
   }
 
   let cart = await Cart.findOne({ userId });
 
   if (!cart) {
-      cart = new Cart({ userId, items: [] });
+    cart = new Cart({ userId, items: [] });
   }
 
   const itemIndex = cart.items.findIndex(item => item.productId.toString() === productId);
 
   if (itemIndex > -1) {
-      const newQuantity = cart.items[itemIndex].quantity + quantity;
-      if (product.stock < newQuantity) {
-          throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
-      }
-      cart.items[itemIndex].quantity = newQuantity;
+    const newQuantity = cart.items[itemIndex].quantity + quantity;
+    if (product.stock < newQuantity) {
+      throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
+    }
+    cart.items[itemIndex].quantity = newQuantity;
   } else {
-      cart.items.push({
-          productId,
-          quantity,
-          name: product.product_name,
-          price: product.price,
-      });
+    cart.items.push({
+      productId,
+      quantity,
+      name: product.product_name,
+      price: product.price,
+    });
   }
 
   await cart.save();
@@ -46,13 +46,13 @@ export const addToCart = async (req, res) => {
   const { productId, quantity } = req.body;
   const userId = req.user?._id;
 
-  try{
+  try {
     const cart = await updateCart(userId, productId, quantity);
 
     return res.status(HttpStatus.OK.code).json(
-        new ApiResponse(HttpStatus.OK.code, cart, "Product added to cart successfully")
+      new ApiResponse(HttpStatus.OK.code, cart, "Product added to cart successfully")
     );
-  } 
+  }
   catch (error) {
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
       new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error adding product to cart", error.message)
@@ -114,12 +114,16 @@ export const getCart = async (req, res) => {
 
   try {
     const cart = await Cart.findOne({ userId }).populate("items.productId");
-
     if (!cart) {
       return res.status(HttpStatus.NOT_FOUND.code).json(
         new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found")
       );
     }
+
+    cart.items = cart.items.filter(item => item.productId !== null);
+    await cart.save();
+
+    console.log("CART: ", cart);
 
     const cartData = {
       _id: cart._id,
@@ -130,6 +134,7 @@ export const getCart = async (req, res) => {
         quantity: item.quantity,
         price: item.price,
         totalItemPrice: item.quantity * item.price,
+        images: item.productId.images
       }))
     };
 
@@ -139,7 +144,7 @@ export const getCart = async (req, res) => {
     );
   } catch (error) {
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error fetching cart")
+      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error fetching cart", error.message)
     );
   }
 };
@@ -172,7 +177,7 @@ export const clearCart = async (req, res) => {
 };
 
 export const deleteCartItem = async (req, res) => {
-  const  productId = req.params?.id; 
+  const productId = req.params?.id;
   const userId = req.user?._id;
 
   try {
