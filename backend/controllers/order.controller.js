@@ -8,6 +8,8 @@ import { createShiprocketOrder, generateShippingLabel, trackShiprocketOrder } fr
 import mongoose from "mongoose";
 import sendEmail from "../services/email.service.js";
 import { verifyPayment } from "../services/payment.service.js";
+import { sendAdminAlert, sendOrderConfirmationEmail, sendOrderShippedEmail } from "../utils/order.util.js";
+import Cart from "../models/cart.model.js";
 
 const ORDER_STATUS = {
   PENDING_PAYMENT: "Pending Payment",
@@ -28,161 +30,223 @@ export const createOrder = async (req, res) => {
     const { orderItems, shippingAddress, paymentMethod } = req.body;
     const userId = req.user?._id;
 
+    if (!orderItems || !Array.isArray(orderItems)) {
+      await session.abortTransaction();
+      return res.status(HttpStatus.BAD_REQUEST.code)
+        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid order items format"));
+    }
+
+
     if (!["razorpay", "upi"].includes(paymentMethod)) {
       return res
         .status(HttpStatus.BAD_REQUEST.code)
         .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid Payment Method"));
     }
 
+    const cart = await Cart.findOne({ userId })
+      .populate({
+        path: 'items.productId',
+        select: 'price product_name sku'
+      })
+      .session(session);
+
+    if (!cart || cart.items.length === 0) {
+      await session.abortTransaction();
+      return res.status(HttpStatus.BAD_REQUEST.code)
+        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Cart is empty"));
+    }
+
+    const cartItemsMap = new Map(
+      cart.items.map(item => [item.productId._id.toString(), item])
+    );
+
+    const validatedOrderItems = [];
     let totalAmount = 0;
-    for (const item of orderItems) {
-      const product = await Product.findById(item.product).session(session);
-      if (!product) {
+
+    for (const selectedItem of orderItems) {
+      const cartItem = cartItemsMap.get(selectedItem.product);
+
+      if (!cartItem) {
         await session.abortTransaction();
-        session.endSession();
-        return res.status(HttpStatus.NOT_FOUND.code)
-          .json({ message: `Product ${item.product} not found` });
+        return res.status(HttpStatus.BAD_REQUEST.code)
+          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
+            `Product ${selectedItem.product} not found in cart`));
       }
-      totalAmount += product.price * item.quantity;
+
+      if (selectedItem.quantity > cartItem.quantity) {
+        await session.abortTransaction();
+        return res.status(HttpStatus.BAD_REQUEST.code)
+          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
+            `Invalid quantity for product ${cartItem.productId.product_name}`));
+      }
+
+      const product = cartItem.productId;
+
+      if (cartItem.price !== product.price) {
+        await session.abortTransaction();
+        return res.status(HttpStatus.BAD_REQUEST.code)
+          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
+            `Price changed for ${product.product_name} - please refresh cart`));
+      }
+
+      validatedOrderItems.push({
+        product: product._id,
+        quantity: selectedItem.quantity,
+        price: cartItem.discountedPrice || product.price,
+        product_name: product.product_name,
+        sku: product.sku
+      });
+
+      totalAmount += (cartItem.discountedPrice || product.price) * selectedItem.quantity;
     }
 
     const options = {
       amount: totalAmount * 100,
       currency: "INR",
       receipt: `order_rcptid_${Date.now()}`,
-      notes: { user_id: userId },
+      notes: { user_id: userId.toString() },
     };
+
 
     const razorpayOrder = await razorpay.orders.create(options);
 
     const order = new Order({
       user: userId,
-      orderItems,
+      orderItems: validatedOrderItems,
       totalAmount,
       shippingAddress,
       paymentMethod,
       razorpayOrderId: razorpayOrder.id,
       status: ORDER_STATUS.PENDING_PAYMENT,
+      appliedCoupons: cart.appliedCoupons
     });
 
     await order.save({ session });
 
+    const remainingItems = cart.items.filter(item =>
+      !orderItems.some(selected => selected.product === item.productId._id.toString())
+    );
+
+    if (remainingItems.length === 0) {
+      await Cart.deleteOne({ userId }).session(session);
+    } else {
+      cart.items = remainingItems;
+      cart.totalPrice = remainingItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      await cart.save({ session });
+    }
+
     await session.commitTransaction();
-    session.endSession();
 
+    return res.status(HttpStatus.CREATED.code)
+      .json(new ApiResponse(HttpStatus.CREATED.code, {
+        orderId: order._id,
+        razorpayOrderId: razorpayOrder.id,
+        amount: totalAmount,
+        currency: "INR"
+      }, "Order created successfully"));
 
-    return res.status(HttpStatus.CREATED.code).json({
-      orderId: order.id,
-      razorpayOrderId: razorpayOrder.id,
-      amount: totalAmount,
-      currency: "INR",
-      message: "Order created. Awaiting payment.",
-    });
   } catch (error) {
     await session.abortTransaction();
+    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, error.message));
+  } finally {
     session.endSession();
-
-    return res
-      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
-      .json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while creating order", error.message));
   }
-};
+}
 
 export const confirmOrder = async (req, res) => {
   const { razorpayPaymentId, razorpayOrderId, razorpaySignature, orderId } = req.body;
+  let order;
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const paymentVerificationResponse = await verifyPayment(req, res);
-
-    if (paymentVerificationResponse.status !== HttpStatus.OK.code) {
+    const verification = await verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+    if (!verification.success) {
       await session.abortTransaction();
-      session.endSession();
-      return paymentVerificationResponse;
+      return res.status(verification.error.statusCode).json(verification.error);
     }
 
-    const order = await Order.findById(orderId).session(session);
-    if (!order || order.paymentStatus !== "Pending") {
+    order = await Order.findOne({
+      _id: orderId,
+      razorpayOrderId
+    }).session(session);
+
+    if (!order) {
       await session.abortTransaction();
-      session.endSession();
-      return res
-        .status(HttpStatus.BAD_REQUEST.code)
-        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid or already confirmed order."));
+      return res.status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Order not found"));
+    }
+
+    if (order.paymentStatus !== "Pending") {
+      await session.abortTransaction();
+      return res.status(HttpStatus.BAD_REQUEST.code)
+        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Order already processed"));
     }
 
     order.paymentStatus = "Completed";
-    order.orderStatus = "Processing";
     order.razorpayPaymentId = razorpayPaymentId;
     order.amountPaid = order.totalAmount;
+    order.orderStatus = "Processing";
+
     await order.save({ session });
-
-    const orderConfirmationHTML = `
-      <p>Hi ${order.shippingAddress.name},</p>
-      <p>Your order <strong>#${order._id}</strong> has been successfully placed.</p>
-    `;
-
-    sendEmail(
-      order.shippingAddress.email,
-      "Order Placed Successfully",
-      `Your order #${order._id} has been placed successfully.`,
-      orderConfirmationHTML
-    );
-
-    const shiprocketOrder = await createShiprocketOrder(order);
-    const shippingLabel = await generateShippingLabel(shiprocketOrder.order_id);
-
-    order.shiprocketOrderId = shiprocketOrder.order_id;
-    order.shippingLabel = shippingLabel.label_url;
-    order.orderStatus = "Shipped";
-    await order.save({ session });
-
     await session.commitTransaction();
-    session.endSession();
 
-    const orderShippedHTML = `
-      <p>Your order <strong>#${order._id}</strong> has been shipped.</p>
-      <p>Track your order <a href="https://shiprocket.co/tracking/${shiprocketOrder.shipment_id}">here</a>.</p>
-    `;
+    await sendOrderConfirmationEmail(order);
 
-    sendEmail(
-      order.shippingAddress.email,
-      "Order Shipped",
-      `Your order #${order._id} has been shipped.`,
-      orderShippedHTML
-    );
+    const shippingSession = await mongoose.startSession();
+    shippingSession.startTransaction();
 
-    logger.info(`Order shipped successfully: ${order._id}`);
+    try {
+      const updatedOrder = await Order.findById(orderId).session(shippingSession);
+      const shiprocketOrder = await createShiprocketOrder(updatedOrder);
+      const shippingLabel = await generateShippingLabel(shiprocketOrder.order_id);
 
-    return res
-      .status(HttpStatus.OK.code)
-      .json(new ApiResponse(HttpStatus.OK.code, [], "Order confirmed & shipped."));
+      updatedOrder.shiprocketOrderId = shiprocketOrder.order_id;
+      updatedOrder.shippingLabel = shippingLabel.label_url;
+      updatedOrder.orderStatus = "Shipped";
+
+      await updatedOrder.save({ session: shippingSession });
+      await shippingSession.commitTransaction();
+
+      await sendOrderShippedEmail(updatedOrder, shiprocketOrder.shipment_id);
+
+      return res.status(HttpStatus.OK.code)
+        .json(new ApiResponse(HttpStatus.OK.code, updatedOrder, "Order confirmed & shipped"));
+
+    } catch (shippingError) {
+      await shippingSession.abortTransaction();
+
+      console.error("Shipping processing failed:", shippingError);
+      await sendAdminAlert(order, shippingError);
+
+      return res.status(HttpStatus.OK.code)
+        .json(new ApiResponse(
+          HttpStatus.OK.code,
+          order,
+          "Payment confirmed but shipping processing failed. Admin notified."
+        ));
+    } finally {
+      shippingSession.endSession();
+    }
 
   } catch (error) {
     await session.abortTransaction();
+    console.error("Order confirmation failed:", error);
+
+    await sendAdminAlert(order || { _id: orderId }, error);
+
+    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(new ApiError(
+        HttpStatus.INTERNAL_SERVER_ERROR.code,
+        "Order processing failed",
+        error.message
+      ));
+  } finally {
     session.endSession();
-
-
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const adminNotificationHTML = `
-      <p>Shiprocket API failed for order <strong>#${order._id}</strong>.</p>
-      <p>Error: ${error.message}</p>
-    `;
-
-    sendEmail(
-      adminEmail,
-      "Shiprocket API Failure",
-      "Shiprocket API failed for an order.",
-      adminNotificationHTML
-    );
-
-    return res
-      .status(HttpStatus.OK.code)
-      .json(new ApiError(HttpStatus.OK.code, "Order confirmed, but shipment failed. Admin notified.", error.message));
   }
 };
-
 
 export const getAllOrders = async (req, res) => {
   try {

@@ -196,52 +196,92 @@ export const verifyCoupon = async (req, res) => {
     }
 };
 
-
 export const applyCoupon = async (req, res) => {
-    const { couponCode } = req.body;
-    const userId = req.user._id;
-  
-    if (!couponCode) {
-      return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Coupon code is required"));
-    }
-  
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
     try {
-      const cart = await Cart.findOne({ userId }).populate("items.productId");
-      if (!cart) {
-        return res.status(HttpStatus.NOT_FOUND.code).json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
-      }
-  
-      const coupon = await Coupon.findOne({ code: couponCode });
-  
-      if (!coupon) {
-        return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid coupon code"));
-      }
-  
-      if (!coupon.isValid()) {
-        return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Coupon is expired"));
-      }
-  
-      const applicableItems = cart.items.filter(item =>
-        coupon.productIds.includes(item.productId.toString())
-      );
-  
-      if (applicableItems.length === 0) {
-        return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code, "Coupon is not applicable to the products in your cart"));
-      }
-  
-      const discountAmount = applicableItems.reduce((total, item) => {
-        total += (item.price * coupon.discountValue / 100) * item.quantity;
-        return total;
-      }, 0);
-  
-      cart.totalPrice -= discountAmount;
-      await cart.save();
-  
-      coupon.timesUsed += 1;
-      await coupon.save();
-  
-      return res.status(HttpStatus.OK.code).json(new ApiResponse(HttpStatus.OK.code, cart, "Coupon applied successfully"));
+        const { couponCode } = req.body;
+        const userId = req.user._id;
+
+        if (!couponCode) {
+            await session.abortTransaction();
+            return res.status(HttpStatus.BAD_REQUEST.code)
+                .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Coupon code is required"));
+        }
+
+        const cart = await Cart.findOne({ userId })
+            .populate('items.productId')
+            .session(session);
+
+        if (!cart) {
+            await session.abortTransaction();
+            return res.status(HttpStatus.NOT_FOUND.code)
+                .json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
+        }
+
+        const coupon = await Coupon.findOne({ code: couponCode }).session(session);
+
+        if (!coupon) {
+            await session.abortTransaction();
+            return res.status(HttpStatus.BAD_REQUEST.code)
+                .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid coupon code"));
+        }
+
+        if (!coupon.isActive || coupon.validUntil < new Date()) {
+            await session.abortTransaction();
+            return res.status(HttpStatus.BAD_REQUEST.code)
+                .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Coupon is no longer valid"));
+        }
+
+        const updatedItems = cart.items.map(item => {
+            if (coupon.applicableProducts.includes(item.productId._id.toString())) {
+                return {
+                    ...item.toObject(),
+                    discountedPrice: calculateDiscount(
+                        item.price,
+                        coupon.discountValue,
+                        coupon.discountType
+                    ),
+                    name: item.productId.product_name,
+                    sku: item.productId.sku
+                };
+            }
+            return item;
+        });
+
+        cart.items = updatedItems;
+        cart.appliedCoupons.push({
+            coupon: coupon._id,
+            code: coupon.code,
+            discountValue: coupon.discountValue,
+            discountType: coupon.discountType
+        });
+
+        cart.totalPrice = updatedItems.reduce((total, item) => 
+            total + (item.price * item.quantity), 0
+        );
+        cart.discountedTotal = updatedItems.reduce((total, item) => 
+            total + ((item.discountedPrice || item.price) * item.quantity), 0
+        );
+
+        await cart.save({ session });
+        await session.commitTransaction();
+
+        return res.status(HttpStatus.OK.code)
+            .json(new ApiResponse(HttpStatus.OK.code, cart, "Coupon applied successfully"));
+
     } catch (error) {
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, error.message));
+        await session.abortTransaction();
+        return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+            .json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, error.message));
+    } finally {
+        session.endSession();
     }
-  };
+};
+
+function calculateDiscount(price, value, type) {
+    return type === 'percentage' 
+        ? price * (1 - value/100)
+        : Math.max(price - value, 0);
+}

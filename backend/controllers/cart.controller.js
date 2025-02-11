@@ -158,7 +158,7 @@ export const clearCart = async (req, res) => {
 
     if (!cart) {
       return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found")
+        new ApiError(HttpStatus.NOT_FOfUND.code, "Cart not found")
       );
     }
 

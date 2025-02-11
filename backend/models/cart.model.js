@@ -15,6 +15,9 @@ const cartItemSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    discountedPrice: {
+        type: Number
+    },
     name: {
         type: String,
         required: true
@@ -29,18 +32,53 @@ const cartSchema = new mongoose.Schema(
             required: true
         },
         items: [cartItemSchema],
-        totalPrice: {
+        discountedTotal: {  // New field for coupon-adjusted total
             type: Number,
             default: 0
         },
+        appliedCoupons: [{
+            couponId: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'Coupon'
+            },
+            code: String,
+            discountValue: Number,
+            discountType: {
+                type: String,
+                enum: ['percentage', 'fixed']
+            },
+            appliedAt: {
+                type: Date,
+                default: Date.now
+            }
+        }]
     },
     {
         timestamps: true
     }
 );
 
-cartSchema.methods.calculateTotal = function () {
-    this.totalPrice = this.items.reduce((total, item) => total + (item.price * item.quantity), 0);
+cartSchema.methods.calculateTotals = function() {
+    const originalTotal = this.items.reduce(
+        (total, item) => total + (item.price * item.quantity), 
+        0
+    );
+
+    let discountedTotal = originalTotal;
+    
+    this.appliedCoupons.forEach(coupon => {
+        if (coupon.discountType === 'percentage') {
+            discountedTotal -= discountedTotal * (coupon.discountValue / 100);
+        } else {
+            discountedTotal = Math.max(
+                discountedTotal - coupon.discountValue, 
+                0
+            );
+        }
+    });
+
+    this.totalPrice = originalTotal;
+    this.discountedTotal = discountedTotal;
 };
 
 const Cart = mongoose.model("Cart", cartSchema);
