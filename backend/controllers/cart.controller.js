@@ -12,7 +12,10 @@ export const updateCart = async (userId, productId, quantity) => {
   }
 
   if (quantity > product.stock) {
-    throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
+    throw new ApiError(
+      HttpStatus.BAD_REQUEST.code,
+      `Only ${product.stock} units available in stock.`
+    );
   }
 
   let cart = await Cart.findOne({ userId });
@@ -21,12 +24,17 @@ export const updateCart = async (userId, productId, quantity) => {
     cart = new Cart({ userId, items: [] });
   }
 
-  const itemIndex = cart.items.findIndex(item => item.productId.toString() === productId);
+  const itemIndex = cart.items.findIndex(
+    (item) => item.productId.toString() === productId
+  );
 
   if (itemIndex > -1) {
     const newQuantity = cart.items[itemIndex].quantity + quantity;
     if (product.stock < newQuantity) {
-      throw new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`);
+      throw new ApiError(
+        HttpStatus.BAD_REQUEST.code,
+        `Only ${product.stock} units available in stock.`
+      );
     }
     cart.items[itemIndex].quantity = newQuantity;
   } else {
@@ -49,14 +57,25 @@ export const addToCart = async (req, res) => {
   try {
     const cart = await updateCart(userId, productId, quantity);
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, cart, "Product added to cart successfully")
-    );
-  }
-  catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error adding product to cart", error.message)
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          cart,
+          "Product added to cart successfully"
+        )
+      );
+  } catch (error) {
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error adding product to cart",
+          error.message
+        )
+      );
   }
 };
 
@@ -68,44 +87,64 @@ export const updateCartItemQuantity = async (req, res) => {
     const product = await Product.findById(productId);
 
     if (!product) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Product not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Product not found"));
     }
 
     if (product.stock < quantity) {
-      return res.status(HttpStatus.BAD_REQUEST.code).json(
-        new ApiError(HttpStatus.BAD_REQUEST.code, `Only ${product.stock} units available in stock.`)
-      );
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(
+          new ApiError(
+            HttpStatus.BAD_REQUEST.code,
+            `Only ${product.stock} units available in stock.`
+          )
+        );
     }
 
     const cart = await Cart.findOne({ userId });
 
     if (!cart) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
     }
 
-    const itemIndex = cart.items.findIndex(item => item.productId.toString() === productId);
+    const itemIndex = cart.items.findIndex(
+      (item) => item.productId.toString() === productId
+    );
 
     if (itemIndex > -1) {
       cart.items[itemIndex].quantity = quantity;
     } else {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Product not found in cart")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(
+          new ApiError(HttpStatus.NOT_FOUND.code, "Product not found in cart")
+        );
     }
 
     await cart.save();
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, cart, "Cart item quantity updated successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          cart,
+          "Cart item quantity updated successfully"
+        )
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error updating cart item quantity")
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error updating cart item quantity"
+        )
+      );
   }
 };
 
@@ -115,12 +154,12 @@ export const getCart = async (req, res) => {
   try {
     const cart = await Cart.findOne({ userId }).populate("items.productId");
     if (!cart) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
     }
 
-    cart.items = cart.items.filter(item => item.productId !== null);
+    cart.items = cart.items.filter((item) => item.productId !== null);
     await cart.save();
 
     console.log("CART: ", cart);
@@ -128,27 +167,37 @@ export const getCart = async (req, res) => {
     const cartData = {
       _id: cart._id,
       totalPrice: cart.totalPrice,
-      items: cart.items.map(item => ({
+      items: cart.items.map((item) => ({
         productId: item.productId._id,
         productName: item.productId.product_name,
         quantity: item.quantity,
         price: item.price,
         totalItemPrice: item.quantity * item.price,
-        images: item.productId.images
-      }))
+        images: item.productId.images,
+      })),
     };
 
-
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, cartData, "Cart fetched successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          cartData,
+          "Cart fetched successfully"
+        )
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error fetching cart", error.message)
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error fetching cart",
+          error.message
+        )
+      );
   }
 };
-
 
 export const clearCart = async (req, res) => {
   const userId = req.user?._id;
@@ -157,22 +206,29 @@ export const clearCart = async (req, res) => {
     const cart = await Cart.findOne({ userId });
 
     if (!cart) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOfUND.code, "Cart not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
     }
 
     cart.items = [];
     cart.totalPrice = 0;
     await cart.save();
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, cart, "Cart cleared successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(HttpStatus.OK.code, cart, "Cart cleared successfully")
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error clearing cart")
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error clearing cart"
+        )
+      );
   }
 };
 
@@ -184,29 +240,45 @@ export const deleteCartItem = async (req, res) => {
     const cart = await Cart.findOne({ userId });
 
     if (!cart) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Cart not found"));
     }
 
-    const itemIndex = cart.items.findIndex(item => item.productId.toString() === productId);
+    const itemIndex = cart.items.findIndex(
+      (item) => item.productId.toString() === productId
+    );
 
     if (itemIndex === -1) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Product not found in cart")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(
+          new ApiError(HttpStatus.NOT_FOUND.code, "Product not found in cart")
+        );
     }
 
     cart.items.splice(itemIndex, 1);
 
     await cart.save();
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, cart, "Cart item deleted successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          cart,
+          "Cart item deleted successfully"
+        )
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error deleting cart item", error.message)
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error deleting cart item",
+          error.message
+        )
+      );
   }
-}
+};
