@@ -13,11 +13,11 @@ export const authenticateShiprocket = async () => {
       password: process.env.SHIPROCKET_PASSWORD,
     });
 
-    SHIPROCKET_TOKEN = response.data.token;
+    SHIPROCKET_TOKEN = response?.data?.token;
     SHIPROCKET_TOKEN_EXPIRY = Date.now() + 10 * 24 * 60 * 60 * 1000;
     return SHIPROCKET_TOKEN;
   } catch (error) {
-    console.log("Erorr: ", error);
+    console.dir("Error: ", error);
     throw new ApiError(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to authenticate with Shiprocket", error.message);
   }
 };
@@ -34,48 +34,50 @@ const ensureTokenValid = async () => {
 
 export const createShiprocketOrder = async (orderDetails) => {
   try {
+    console.log("SHIPROCKET_TOKEN  and EXPIRY:",  SHIPROCKET_TOKEN,   SHIPROCKET_TOKEN_EXPIRY);
     await ensureTokenValid();
-
-    console.log("Creating Shiprocket Order:", orderDetails);
-
-
+    console.log("Order Details: ", orderDetails);    
     const response = await axios.post(`${SHIPROCKET_BASE_URL}/orders/create/adhoc`, orderDetails, {
       headers: {
         Authorization: `Bearer ${SHIPROCKET_TOKEN}`,
       },
     });
-console.log("response: ", response);
-    return response.data;
+    console.log("received respose from shiprocket: ", response?.data);
+    return response?.data;
   } catch (error) {
+    console.log("Error while creating shiprocket order: ", error);
     if (error.response?.status === HttpStatus.UNAUTHORIZED.code) {
       await authenticateShiprocket();
       return createShiprocketOrder(orderDetails);
     }
-    console.log("ERRROR : ", error.message);
+    console.error(error);
     throw new ApiError(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to create Shiprocket order", error.message);
   }
 };
 
-export const generateShippingLabel = async (orderId, shipmentId) => {
+export const generateShippingLabel = async (shipmentId) => {
   try {
     await ensureTokenValid();
 
     const awbResponse = await assignAWB(shipmentId);
     console.log("AWB Assigned:", awbResponse);
 
-    const response = await axios.get(`${SHIPROCKET_BASE_URL}/courier/generate/label`, {
-      params: { order_id: orderId },
-      headers: {
+    const response = await axios.post(`${SHIPROCKET_BASE_URL}/courier/generate/label`,
+      { shipment_id: [shipmentId] },
+      {
+        headers: {
+	'Content-Type': 'application/json',
         Authorization: `Bearer ${SHIPROCKET_TOKEN}`,
       },
     });
 
     console.log("Shipping Label Response:", response.data);
-    return response.data;
+    return response?.data;
   } catch (error) {
+    console.log("Error while generating shipping label:", error);
     if (error.response?.status === HttpStatus.UNAUTHORIZED.code) {
       await authenticateShiprocket();
-      return generateShippingLabel(orderId, shipmentId);
+      return generateShippingLabel(shipmentId);
     }
     throw new ApiError(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to generate shipping label", error.message);
   }
@@ -95,7 +97,7 @@ export const assignAWB = async (shipmentId) => {
       }
     );
 
-    return response.data;
+    return response?.data;
   } catch (error) {
     if (error.response?.status === HttpStatus.UNAUTHORIZED.code) {
       await authenticateShiprocket();

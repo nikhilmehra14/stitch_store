@@ -1,55 +1,53 @@
 import mongoose from 'mongoose';
 
 const couponSchema = new mongoose.Schema({
-    code: { 
-        type: String, 
-        required: true, 
+    code: {
+        type: String,
+        required: true,
         unique: true,
         uppercase: true
     },
-    discountType: {
-        type: String,
-        enum: ['percentage'],
-        required: true,
-    },
-    discountValue: {
+    discountPercentage: {
         type: Number,
         required: true,
         min: 0,
+        max: 100
     },
-    productIds: [{ 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Product' 
-    }],
-    validFrom: { 
-        type: Date, 
+    maxDiscount: {
+        type: Number,
         required: true
     },
-    validUntil: { 
-        type: Date, 
+    minCartValue: {
+        type: Number,
+        default: 0
+    },
+    validFrom: {
+        type: Date,
+        required: true
+    },
+    validUntil: {
+        type: Date,
         required: true
     },
     usageLimit: {
         type: Number,
-        default: 1, 
+        default: 1,
         min: 1,
     },
-    timesUsed: {
-        type: Number,
-        default: 0,
-    },
+    isActive: {
+        type: Boolean,
+        default: true
+    }
 }, { timestamps: true });
 
-couponSchema.methods.isValid = function () {
+couponSchema.pre('save', function (next) {
     const currentDate = new Date();
-    if (this.validFrom > currentDate || this.validUntil < currentDate) {
-        return false;
-    }
-    if (this.timesUsed >= this.usageLimit) {
-        return false;
-    }
-    return true;
-};
+    this.isActive = (
+        this.validFrom <= currentDate &&
+        this.validUntil >= currentDate
+    );
+    next();
+});
 
 const Coupon = mongoose.model("Coupon", couponSchema);
 export default Coupon;

@@ -15,19 +15,24 @@ export const googleCallback = (req, res) => {
 
     const { user, accessToken, refreshToken } = data;
 
-    await User.findOneAndUpdate(
-      { googleId: user.googleId },
-      { accessToken, refreshToken },
-      { upsert: true }
-    );
+    await User.findByIdAndUpdate(user._id, { refreshToken }, {new: true});
 
     const options = {
       httpOnly: true,
-      secure: true
+      secure: true,
+      path: '/',
+      sameSite: 'None'
     };
 
     res.cookie("accessToken", accessToken, options)
-      .cookie("refreshToken", refreshToken, options);
+    .cookie("refreshToken", refreshToken, options);
+    console.log("Cookies Set:", res.getHeaders()["set-cookie"]);
+    
+    //const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+
+    //return res.status(HttpStatus.OK.code).json(
+//      new ApiResponse(HttpStatus.OK.code, { user: loggedInUser, accessToken, refreshToken }, "User logged in successfully")
+  //  );
 
     const frontendUrl = process.env.FRONTEND_URL;
     return res.redirect(frontendUrl);

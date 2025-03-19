@@ -6,7 +6,7 @@ import { HttpStatus } from "../constants/status.code.js";
 import { Product } from "../models/product.model.js";
 import mongoose from "mongoose";
 import { User } from "../models/user.model.js";
-import { generateAccessAndRefereshTokens } from "./user.controller.js";
+import { generateAccessAndRefreshTokens } from "./user.controller.js";
 import Coupon from "../models/coupon.model.js";
 
 export const registerAdmin = async (req, res) => {
@@ -62,14 +62,16 @@ export const loginAdmin = async (req, res) => {
       return res.status(HttpStatus.UNAUTHORIZED.code).json(new ApiError(HttpStatus.UNAUTHORIZED.code, "Password is incorrect"));
     }
 
-    const { accessToken, refreshToken } = await generateAccessAndRefereshTokens(user._id);
+    const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id);
     const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
-
+    
     const options = {
       httpOnly: true,
-      secure: true
-    }
-
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None':'Lax'
+    };
+     
     return res.status(HttpStatus.OK.code)
       .cookie("accessToken", accessToken, options)
       .cookie("refreshToken", refreshToken, options)
@@ -80,6 +82,16 @@ export const loginAdmin = async (req, res) => {
   }
 };
 
+export const isLoggedIn = async (req, res) => {
+  try {
+    return res
+      .status(HttpStatus.OK.code)
+      .json(new ApiResponse(HttpStatus.OK.code, {}, "Admin authorized Successfully."));
+
+  } catch (error) {
+    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while authorizing user", error?.message));
+  }
+}
 
 export const deactivateUser = async (req, res) => {
   try {

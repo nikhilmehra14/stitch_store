@@ -11,16 +11,20 @@ const app = express();
 
 
 app.use(helmet({
-    contentSecurityPolicy: false,
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-    frameguard: { action: "deny" },
-    xssFilter: true,
-    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
-    noSniff: true,
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: false,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  frameguard: { action: "deny" },
+  xssFilter: true,
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  noSniff: true,
 }));
 
-const allowedOrigins = process.env.CORS_ORIGIN?.split(",") || ["http://localhost:5173"];
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",")
+  : ["http://localhost:5173", "https://thestitchstore.in"];
+
+
 app.use(cors({
     origin: allowedOrigins,
     credentials: true,
@@ -28,10 +32,22 @@ app.use(cors({
     allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.use(morgan("dev"));
 
-app.use(express.json({ limit: "16kb" }));
-app.use(express.urlencoded({ extended: true, limit: "16kb" }));
+
+app.use(express.json({ limit: "20mb" }));
+app.use(morgan((tokens, req, res) => {
+  const logParts = [
+    tokens.method(req, res),
+    tokens.url(req, res),
+    tokens.status(req, res),
+    tokens.res(req, res, 'content-length'),
+    '-',
+    tokens['response-time'](req, res), 'ms',
+  ];
+  return logParts.join(' ');
+}));
+
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(express.static("public"));
 app.use(cookieParser());
 
@@ -47,6 +63,7 @@ import authMiddleware from "./middlewares/auth.middleware.js";
 import couponRoutes from "./routes/coupon.routes.js";
 import orderRoutes from "./routes/order.routes.js";
 import wishlistRoutes from "./routes/wishlist.routes.js";
+import carouselRoutes from "./routes/carousel.routes.js";
 
 app.use("/auth", googleRoutes);
 app.use("/api/v1/users", userRoutes);
@@ -57,6 +74,7 @@ app.use("/api/v1/cart", authMiddleware, cartRoutes);
 app.use("/api/v1/coupon", authMiddleware, couponRoutes);
 app.use("/api/v1/order", authMiddleware, orderRoutes);
 app.use("/api/v1/wishlist", authMiddleware, wishlistRoutes);
+app.use("/api/v1/carousel", carouselRoutes);
 
 app.get("/", (req, res) => {
     res.status(HttpStatus.OK.code).json(new ApiResponse(HttpStatus.OK.code, [], "We'll live soon! Stay tuned!"));

@@ -10,7 +10,7 @@ const authMiddleware = async (req, res, next) => {
     try {
         const token = req.cookies?.accessToken || req.header("Authorization")?.replace("Bearer ", " ");
         if (!token) {
-            return res.status(HttpStatus.UNAUTHORIZED.code).json(new ApiError(HttpStatus.UNAUTHORIZED.code, "Invalid Token"));
+            return res.status(HttpStatus.UNAUTHORIZED.code).json(new ApiError(HttpStatus.UNAUTHORIZED.code, "Please Login. Invalid Token"));
         }
 
         const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
@@ -18,7 +18,7 @@ const authMiddleware = async (req, res, next) => {
 
         const user = await User.findById(decodedToken?._id).select("-password -refreshToken");
         if (!user) {
-            return res.status(HttpStatus.UNAUTHORIZED.code).json(new ApiError(HttpStatus.UNAUTHORIZED.code, "Invalid Token"));
+            return res.status(HttpStatus.UNAUTHORIZED.code).json(new ApiError(HttpStatus.UNAUTHORIZED.code, "Please Login. Invalid Token"));
         }
 
         req.user = user; // Attach user data to request

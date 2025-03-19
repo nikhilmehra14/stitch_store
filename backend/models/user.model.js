@@ -41,7 +41,10 @@ const userSchema = new mongoose.Schema(
         message: "Full name must be between 3 and 100 characters.",
       },
     },
-    addresses: [addressSchema], 
+    address: { 
+      type: mongoose.Schema.Types.Mixed, 
+      default: "" 
+    }, 
     avatar: {
       type: String,
       default: "https://example.com/default-avatar.png",
@@ -51,10 +54,14 @@ const userSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: true,
+      required: function() {
+      	return !this.googleId;
+      },
       minlength: [8, "Password must be at least 8 characters long"],
       validate: {
         validator: function (v) {
+          if (this.googleId) return true;
+          if (v.startsWith("$2b$")) return true;
           return /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(v);
         },
         message: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character.",

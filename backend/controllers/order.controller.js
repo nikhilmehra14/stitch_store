@@ -4,15 +4,25 @@ import ApiResponse from "../utils/ApiResponse.js";
 import ApiError from "../utils/ApiError.js";
 import { HttpStatus } from "../constants/status.code.js";
 import Razorpay from "razorpay";
-import { createShiprocketOrder, generateShippingLabel, trackShiprocketOrder } from "../services/shiprocket.service.js";
+import {
+  cancelShiprocketOrder,
+  createShiprocketOrder,
+  generateShippingLabel,
+  trackShiprocketOrder,
+} from "../services/shiprocket.service.js";
 import mongoose from "mongoose";
 import sendEmail from "../services/email.service.js";
 import { verifyPayment } from "../services/payment.service.js";
-import { sendAdminAlert, sendOrderConfirmationEmail, sendOrderShippedEmail } from "../utils/order.util.js";
+import {
+  sendAdminAlert,
+  sendOrderConfirmationEmail,
+  sendOrderShippedEmail,
+} from "../utils/order.util.js";
 import Cart from "../models/cart.model.js";
+import Coupon from "../models/coupon.model.js";
 
 const ORDER_STATUS = {
-  PENDING_PAYMENT: "Pending Payment",
+  PENDING_PAYMENT: "Pending",
   PAID: "Paid",
   SHIPPED: "Shipped",
 };
@@ -32,34 +42,39 @@ export const createOrder = async (req, res) => {
 
     if (!orderItems || !Array.isArray(orderItems)) {
       await session.abortTransaction();
-      return res.status(HttpStatus.BAD_REQUEST.code)
-        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid order items format"));
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(
+          new ApiError(
+            HttpStatus.BAD_REQUEST.code,
+            "Invalid order items format"
+          )
+        );
     }
-
 
     if (!["razorpay", "upi"].includes(paymentMethod)) {
       return res
         .status(HttpStatus.BAD_REQUEST.code)
-        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid Payment Method"));
+        .json(
+          new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid Payment Method")
+        );
     }
 
     const cart = await Cart.findOne({ userId })
-      .populate({
-        path: 'items.productId',
-        select: 'price product_name sku'
-      })
+      .populate({ path: "items.productId", select: "price product_name sku" })
+      .populate("shippingFee items appliedCoupons")
       .session(session);
 
     if (!cart || cart.items.length === 0) {
       await session.abortTransaction();
-      return res.status(HttpStatus.BAD_REQUEST.code)
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
         .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Cart is empty"));
     }
 
     const cartItemsMap = new Map(
-      cart.items.map(item => [item.productId._id.toString(), item])
+      cart.items.map((item) => [item.productId._id.toString(), item])
     );
-
     const validatedOrderItems = [];
     let totalAmount = 0;
 
@@ -68,25 +83,39 @@ export const createOrder = async (req, res) => {
 
       if (!cartItem) {
         await session.abortTransaction();
-        return res.status(HttpStatus.BAD_REQUEST.code)
-          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
-            `Product ${selectedItem.product} not found in cart`));
+        return res
+          .status(HttpStatus.BAD_REQUEST.code)
+          .json(
+            new ApiError(
+              HttpStatus.BAD_REQUEST.code,
+              `Product ${selectedItem.product} not found in cart`
+            )
+          );
       }
 
       if (selectedItem.quantity > cartItem.quantity) {
         await session.abortTransaction();
-        return res.status(HttpStatus.BAD_REQUEST.code)
-          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
-            `Invalid quantity for product ${cartItem.productId.product_name}`));
+        return res
+          .status(HttpStatus.BAD_REQUEST.code)
+          .json(
+            new ApiError(
+              HttpStatus.BAD_REQUEST.code,
+              `Invalid quantity for ${cartItem.productId.product_name}`
+            )
+          );
       }
 
       const product = cartItem.productId;
-
       if (cartItem.price !== product.price) {
         await session.abortTransaction();
-        return res.status(HttpStatus.BAD_REQUEST.code)
-          .json(new ApiError(HttpStatus.BAD_REQUEST.code,
-            `Price changed for ${product.product_name} - please refresh cart`));
+        return res
+          .status(HttpStatus.BAD_REQUEST.code)
+          .json(
+            new ApiError(
+              HttpStatus.BAD_REQUEST.code,
+              `Price changed for ${product.product_name} - refresh cart`
+            )
+          );
       }
 
       validatedOrderItems.push({
@@ -94,155 +123,310 @@ export const createOrder = async (req, res) => {
         quantity: selectedItem.quantity,
         price: cartItem.discountedPrice || product.price,
         product_name: product.product_name,
-        sku: product.sku
+        sku: product.sku,
       });
 
-      totalAmount += (cartItem.discountedPrice || product.price) * selectedItem.quantity;
+      const finalPrice = cartItem.discountedPrice || product.price;
+      totalAmount += finalPrice * selectedItem.quantity;
     }
 
-    const options = {
-      amount: totalAmount * 100,
+    const shippingFee = cart.shippingFee || 0;
+    totalAmount += shippingFee;
+
+    let couponDiscount = 0;
+    if (cart.appliedCoupons && cart.appliedCoupons.length === 1) {
+      const coupon = cart.appliedCoupons[0];
+      if (coupon.discountPercentage > 0) {
+        const discountAmount = (totalAmount * coupon.discountPercentage) / 100;
+        couponDiscount = Math.min(discountAmount, coupon.maxDiscount);
+      }
+    }
+
+    totalAmount -= couponDiscount;
+
+    if (totalAmount < 0) totalAmount = 0;
+
+    const razorpayOrder = await razorpay.orders.create({
+      amount: Math.round(totalAmount * 100),
       currency: "INR",
       receipt: `order_rcptid_${Date.now()}`,
       notes: { user_id: userId.toString() },
-    };
-
-
-    const razorpayOrder = await razorpay.orders.create(options);
+    });
 
     const order = new Order({
       user: userId,
       orderItems: validatedOrderItems,
       totalAmount,
+      shippingFee,
       shippingAddress,
       paymentMethod,
       razorpayOrderId: razorpayOrder.id,
       status: ORDER_STATUS.PENDING_PAYMENT,
-      appliedCoupons: cart.appliedCoupons
+      appliedCoupons: cart.appliedCoupons,
     });
 
     await order.save({ session });
 
-    const remainingItems = cart.items.filter(item =>
-      !orderItems.some(selected => selected.product === item.productId._id.toString())
-    );
-
-    if (remainingItems.length === 0) {
-      await Cart.deleteOne({ userId }).session(session);
-    } else {
-      cart.items = remainingItems;
-      cart.totalPrice = remainingItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      await cart.save({ session });
-    }
-
     await session.commitTransaction();
+    console.log("razorpay order: ", razorpayOrder);
 
-    return res.status(HttpStatus.CREATED.code)
-      .json(new ApiResponse(HttpStatus.CREATED.code, {
-        orderId: order._id,
-        razorpayOrderId: razorpayOrder.id,
-        amount: totalAmount,
-        currency: "INR"
-      }, "Order created successfully"));
-
+    return res.status(HttpStatus.CREATED.code).json(
+      new ApiResponse(
+        HttpStatus.CREATED.code,
+        {
+          orderId: order?._id,
+          razorpayOrderId: razorpayOrder?.id,
+          amount: totalAmount,
+          shippingFee,
+          currency: "INR",
+        },
+        "Order created successfully, waiting for payment confirmation."
+      )
+    );
   } catch (error) {
     await session.abortTransaction();
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+    console.error("Order Creation Error:", error);
+
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
       .json(new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, error.message));
   } finally {
     session.endSession();
   }
-}
+};
+
+export const clearCart = async (userId, session) => {
+  try {
+    const cart = await Cart.findOne({ userId }).session(session);
+    if (!cart) {
+      return { success: false, message: "Cart not found" };
+    }
+
+    cart.items = [];
+    cart.appliedCoupons = [];
+    cart.discountedTotal = 0;
+    cart.totalPrice = 0;
+    await cart.save({ session });
+
+    return { success: true, message: "Cart cleared successfully" };
+  } catch (error) {
+    return {
+      success: false,
+      message: "Error clearing cart",
+      error: error.message,
+    };
+  }
+};
 
 export const confirmOrder = async (req, res) => {
-  const { razorpayPaymentId, razorpayOrderId, razorpaySignature, orderId } = req.body;
+  const { razorpayPaymentId, razorpayOrderId, razorpaySignature, orderId } =
+    req.body;
   let order;
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const verification = await verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+    const verification = await verifyPayment(
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature
+    );
     if (!verification.success) {
       await session.abortTransaction();
-      return res.status(verification.error.statusCode).json(verification.error);
+      return res
+        .status(verification.error?.statusCode || 500)
+        .json(
+          new ApiError(
+            verification.error?.statusCode ||
+              HttpStatus.INTERNAL_SERVER_ERROR.code,
+            "Payment verification failed"
+          )
+        );
     }
 
-    order = await Order.findOne({
-      _id: orderId,
-      razorpayOrderId
-    }).session(session);
-
-    if (!order) {
+    order = await Order.findOne({ _id: orderId, razorpayOrderId }).session(
+      session
+    );
+    if (!order || order.paymentStatus !== ORDER_STATUS.PENDING_PAYMENT) {
       await session.abortTransaction();
-      return res.status(HttpStatus.NOT_FOUND.code)
-        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Order not found"));
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid order"));
     }
 
-    if (order.paymentStatus !== "Pending") {
-      await session.abortTransaction();
-      return res.status(HttpStatus.BAD_REQUEST.code)
-        .json(new ApiError(HttpStatus.BAD_REQUEST.code, "Order already processed"));
+    const cart = await Cart.findOne({ userId: order.user }).session(session);
+    if (
+      !cart ||
+      !Array.isArray(cart.appliedCoupons) ||
+      cart.appliedCoupons.length === 0
+    ) {
+      console.error("No applied coupons found for the cart");
+    } else {
+      for (const appliedCoupon of cart.appliedCoupons) {
+        const now = new Date();
+
+        const totalCouponUsage = await Cart.countDocuments({
+          "appliedCoupons.code": appliedCoupon.code,
+        }).session(session);
+
+        const coupon = await Coupon.findById(appliedCoupon.couponId).session(
+          session
+        );
+        if (
+          coupon &&
+          coupon.usageLimit &&
+          totalCouponUsage >= coupon.usageLimit
+        ) {
+          await session.abortTransaction();
+          return res
+            .status(HttpStatus.BAD_REQUEST.code)
+            .json(
+              new ApiError(
+                HttpStatus.BAD_REQUEST.code,
+                `Coupon ${appliedCoupon.code} has exceeded its usage limit`
+              )
+            );
+        }
+
+        const updateResult = await Coupon.updateOne(
+          {
+            _id: appliedCoupon.couponId,
+            validFrom: { $lte: now },
+            validUntil: { $gte: now },
+            isActive: true,
+            $expr: { $lt: ["$timesUsed", "$usageLimit"] },
+          },
+          { $inc: { timesUsed: 1 } }
+        ).session(session);
+
+        if (updateResult.modifiedCount === 0) {
+          await session.abortTransaction();
+          return res
+            .status(HttpStatus.BAD_REQUEST.code)
+            .json(
+              new ApiError(
+                HttpStatus.BAD_REQUEST.code,
+                `Coupon ${appliedCoupon.code} is invalid`
+              )
+            );
+        }
+
+        const updatedCoupon = await Coupon.findById(
+          appliedCoupon.couponId
+        ).session(session);
+        if (updatedCoupon.timesUsed >= updatedCoupon.usageLimit) {
+          updatedCoupon.isActive = false;
+          await updatedCoupon.save({ session });
+        }
+      }
     }
 
-    order.paymentStatus = "Completed";
+    order.status = ORDER_STATUS.PAID;
     order.razorpayPaymentId = razorpayPaymentId;
     order.amountPaid = order.totalAmount;
-    order.orderStatus = "Processing";
-
     await order.save({ session });
+
+    const clearCartResult = await clearCart(order.user, session);
+    if (!clearCartResult.success) {
+      console.error("Failed to clear cart:", clearCartResult.message);
+      await session.abortTransaction();
+      return res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+        .json(
+          new ApiError(
+            HttpStatus.INTERNAL_SERVER_ERROR.code,
+            "Error clearing cart"
+          )
+        );
+    }
+
     await session.commitTransaction();
+    Promise.allSettled([
+      sendOrderConfirmationEmail(order)
+    ]).catch(err => console.error("Email Error:", err));
 
-    await sendOrderConfirmationEmail(order);
+    const shiprocketPayload = {
+      order_id: order._id.toString(),
+      order_date: new Date().toISOString().split("T")[0],
+      payment_method: "prepaid",
+      order_items: order.orderItems.map((item) => ({
+        product_id: item.product.toString(),
+        quantity: item.quantity,
+        price: item.price,
+        product_name: item.product_name,
+        sku: item.sku,
+        units: item.quantity,
+        selling_price: item.price,
+        name: item.product_name,
+      })),
+      sub_total: order.totalAmount,
+      shipping_is_billing: true,
+      billing_customer_name: order.shippingAddress.name,
+      billing_last_name: "",
+      billing_address: order.shippingAddress.addressLine1,
+      billing_state: order.shippingAddress.state,
+      billing_country: order.shippingAddress.country,
+      billing_phone: order.shippingAddress.phone,
+      billing_pincode: order.shippingAddress.zipCode,
+      length: 15,
+      breadth: 5,
+      height: 20, 
+      weight: 0.8,
+      pickup_location: "Home",
+    };    
 
-    const shippingSession = await mongoose.startSession();
-    shippingSession.startTransaction();
-
+    console.log("shiprocket payload: ", shiprocketPayload);
     try {
-      const updatedOrder = await Order.findById(orderId).session(shippingSession);
-      const shiprocketOrder = await createShiprocketOrder(updatedOrder);
-      const shippingLabel = await generateShippingLabel(shiprocketOrder.order_id);
+      const shiprocketOrder = await createShiprocketOrder(shiprocketPayload);
+      const shippingLabel = await generateShippingLabel(
+        shiprocketOrder.shipment_id
+      );
 
-      updatedOrder.shiprocketOrderId = shiprocketOrder.order_id;
-      updatedOrder.shippingLabel = shippingLabel.label_url;
-      updatedOrder.orderStatus = "Shipped";
+      order.shiprocketOrderId = shiprocketOrder.order_id;
+      order.shippingLabel = shippingLabel.label_url;
+      order.status = ORDER_STATUS.SHIPPED;
+      await order.save();
 
-      await updatedOrder.save({ session: shippingSession });
-      await shippingSession.commitTransaction();
+      await sendOrderShippedEmail(order, shiprocketOrder.shipment_id);
 
-      await sendOrderShippedEmail(updatedOrder, shiprocketOrder.shipment_id);
-
-      return res.status(HttpStatus.OK.code)
-        .json(new ApiResponse(HttpStatus.OK.code, updatedOrder, "Order confirmed & shipped"));
-
+      return res
+        .status(HttpStatus.OK.code)
+        .json(
+          new ApiResponse(
+            HttpStatus.OK.code,
+            order,
+            "Order confirmed & shipped"
+          )
+        );
     } catch (shippingError) {
-      await shippingSession.abortTransaction();
-
       console.error("Shipping processing failed:", shippingError);
       await sendAdminAlert(order, shippingError);
 
-      return res.status(HttpStatus.OK.code)
-        .json(new ApiResponse(
-          HttpStatus.OK.code,
-          order,
-          "Payment confirmed but shipping processing failed. Admin notified."
-        ));
-    } finally {
-      shippingSession.endSession();
+      return res
+        .status(HttpStatus.OK.code)
+        .json(
+          new ApiResponse(
+            HttpStatus.OK.code,
+            order,
+            "Payment confirmed but shipping failed. Admin notified."
+          )
+        );
     }
-
   } catch (error) {
     await session.abortTransaction();
     console.error("Order confirmation failed:", error);
-
     await sendAdminAlert(order || { _id: orderId }, error);
 
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code)
-      .json(new ApiError(
-        HttpStatus.INTERNAL_SERVER_ERROR.code,
-        "Order processing failed",
-        error.message
-      ));
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Order processing failed",
+          error.message
+        )
+      );
   } finally {
     session.endSession();
   }
@@ -291,7 +475,9 @@ export const getAllOrders = async (req, res) => {
           "orderItems.price": 1,
           "orderItems.quantity": 1,
           "orderItems.totalPrice": 1,
-          "orderItems.imageUrl": { $arrayElemAt: ["$orderItems.productDetails.images", 0] },
+          "orderItems.imageUrl": {
+            $arrayElemAt: ["$orderItems.productDetails.images", 0],
+          },
           user: {
             userId: "$userInfo._id",
             email: "$userInfo.email",
@@ -319,30 +505,54 @@ export const getAllOrders = async (req, res) => {
       },
     ]);
 
-    res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, orders, "Orders retrieved successfully")
-    );
+    res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          orders,
+          "Orders retrieved successfully"
+        )
+      );
   } catch (error) {
-    res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while fetching orders", error.message)
-    );
+    res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while fetching orders",
+          error.message
+        )
+      );
   }
 };
-
 
 export const getUserOrders = async (req, res) => {
   try {
     const userId = req.user._id;
-    const orders = await Order.find({ user: userId })
-      .populate("orderItems.product");
+    const orders = await Order.find({ user: userId }).populate(
+      "orderItems.product"
+    );
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, orders, "User orders retrieved successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          orders,
+          "User orders retrieved successfully"
+        )
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while fetching user orders", error.message)
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while fetching user orders",
+          error.message
+        )
+      );
   }
 };
 
@@ -351,36 +561,55 @@ export const updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { orderStatus } = req.body;
 
-    const validStatuses = ["Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
+    const validStatuses = [
+      "Pending",
+      "Processing",
+      "Shipped",
+      "Delivered",
+      "Cancelled",
+    ];
     if (!validStatuses.includes(orderStatus)) {
-      return res.status(HttpStatus.BAD_REQUEST.code).json(
-        new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid order status")
-      );
+      return res
+        .status(HttpStatus.BAD_REQUEST.code)
+        .json(
+          new ApiError(HttpStatus.BAD_REQUEST.code, "Invalid order status")
+        );
     }
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Order not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Order not found"));
     }
 
     order.orderStatus = orderStatus;
     await order.save();
 
-    // If order is marked as "Shipped", fetch tracking details from Shiprocket
     let trackingDetails = null;
     if (orderStatus === "Shipped" && order.shiprocketOrderId) {
       trackingDetails = await trackShiprocketOrder(order.shiprocketOrderId);
     }
 
-    return res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, { order, trackingDetails }, "Order status updated successfully")
-    );
+    return res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(
+          HttpStatus.OK.code,
+          { order, trackingDetails },
+          "Order status updated successfully"
+        )
+      );
   } catch (error) {
-    return res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while updating order status", error.message)
-    );
+    return res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while updating order status",
+          error.message
+        )
+      );
   }
 };
 
@@ -390,9 +619,9 @@ export const deleteOrder = async (req, res) => {
     const order = await Order.findById(orderId);
 
     if (!order) {
-      return res.status(HttpStatus.NOT_FOUND.code).json(
-        new ApiError(HttpStatus.NOT_FOUND.code, "Order not found")
-      );
+      return res
+        .status(HttpStatus.NOT_FOUND.code)
+        .json(new ApiError(HttpStatus.NOT_FOUND.code, "Order not found"));
     }
 
     if (order.shiprocketOrderId) {
@@ -405,12 +634,20 @@ export const deleteOrder = async (req, res) => {
 
     await Order.findByIdAndDelete(orderId);
 
-    res.status(HttpStatus.OK.code).json(
-      new ApiResponse(HttpStatus.OK.code, null, "Order deleted successfully")
-    );
+    res
+      .status(HttpStatus.OK.code)
+      .json(
+        new ApiResponse(HttpStatus.OK.code, null, "Order deleted successfully")
+      );
   } catch (error) {
-    res.status(HttpStatus.INTERNAL_SERVER_ERROR.code).json(
-      new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.code, "Error while deleting an order", error.message)
-    );
+    res
+      .status(HttpStatus.INTERNAL_SERVER_ERROR.code)
+      .json(
+        new ApiError(
+          HttpStatus.INTERNAL_SERVER_ERROR.code,
+          "Error while deleting an order",
+          error.message
+        )
+      );
   }
 };

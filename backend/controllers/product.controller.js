@@ -5,7 +5,7 @@ import ApiError from "../utils/ApiError.js";
 import { HttpStatus } from "../constants/status.code.js";
 import { Product } from "../models/product.model.js";
 import mongoose from "mongoose";
-import { uploadOnCloudinary } from "../services/cloudinary.service.js";
+import { uploadOnCloudinary, deleteFromCloudinary } from "../services/cloudinary.service.js";
 
 export const addProduct = async (req, res) => {
   try {
@@ -61,6 +61,15 @@ export const getProducts = async (req, res) => {
 export const getProductById = async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(HttpStatus.BAD_REQUEST.code).json(new ApiError(HttpStatus.BAD_REQUEST.code,
+        "Invalid product ID format.",
+        null,
+        false));
+    }
+
+
     const product = await Product.findById(id);
 
     if (!product) {
@@ -93,16 +102,9 @@ export const updateProduct = async (req, res) => {
     }
 
     if (product.images && product.images.length > 0) {
-      product.images.forEach((imagePath) => {
-        const fullPath = path.resolve(imagePath);
-        fs.unlink(fullPath, (err) => {
-          if (err) {
-            console.error(`Failed to delete image: ${fullPath}`, err);
-          } else {
-            console.log(`Image deleted: ${fullPath}`);
-          }
-        });
-      });
+      for (const imageUrl of product.images) {
+        await deleteFromCloudinary(imageUrl);
+      }
     }
 
     product.images = [];
@@ -164,16 +166,9 @@ export const deleteProduct = async (req, res) => {
         .json(new ApiError(HttpStatus.NOT_FOUND.code, "Product not found"));
     }
     if (product.images && product.images.length > 0) {
-      product.images.forEach((imagePath) => {
-        const fullPath = path.resolve(imagePath);
-        fs.unlink(fullPath, (err) => {
-          if (err) {
-            console.error(`Failed to delete image: ${fullPath}`, err);
-          } else {
-            console.log(`Image deleted: ${fullPath}`);
-          }
-        });
-      });
+      for (const imageUrl of product.images) {
+        await deleteFromCloudinary(imageUrl);
+      }
     }
 
     await product.deleteOne();

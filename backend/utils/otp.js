@@ -1,34 +1,64 @@
+import redisClient from "../services/redis.service.js";
 import sendEmail from "../services/email.service.js";
 
-const otpStore = new Map();
-
-export const generateAndStoreOTP = (key) => {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000;
-
-  otpStore.set(key, { otp, expiresAt });
-
-  return otp;
-};
-
-export const verifyOTP = (key, otp) => {
-  const storedOTP = otpStore.get(key);
-
-  if (!storedOTP) return false;
-  if (storedOTP.expiresAt < Date.now()) {
-    otpStore.delete(key);
-    return false;
+let isConnected = false;
+export const initializeRedis = async () => {
+  if (!isConnected) {
+    try {
+      await redisClient.connect();
+      isConnected = true;
+    } catch (error) {
+      console.error("Failed to connect to Redis:", error.message);
+      throw error;
+    }
   }
-  if (storedOTP.otp !== otp) return false;
-
-  otpStore.delete(key);
-  return true;
 };
+
+
+export const generateAndStoreOTP = async (email) => {
+  try {
+    if (!redisClient.isOpen) {
+      console.log("Reconnecting to Redis...");
+      await redisClient.connect();
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresIn = 300;
+
+    await redisClient.setEx(email, expiresIn, otp);
+    return otp;
+  } catch (error) {
+    console.error("OTP Generation Error:", error.message);
+    throw new Error("Failed to generate and store OTP");
+  }
+};
+
+
+export const verifyOTP = async (email, otp) => {
+  try {
+    if (!redisClient.isOpen) {
+      console.log("Reconnecting to Redis...");
+      await redisClient.connect();
+    }
+
+    const storedOTP = await redisClient.get(email);
+  
+    if (!storedOTP || storedOTP !== otp) return false;
+
+    await redisClient.del(email);
+    return true;
+  } catch (error) {
+    console.error("OTP Verification Error:", error.message);
+    throw new Error("Failed to verify OTP");
+  }
+};
+
 
 
 export const sendOtpEmail = async (to, name, otp) => {
-  const subject = "Your One-Time Password (OTP) - The Stitch Store";
-  const html = `
+  try {
+    const subject = "Your One-Time Password (OTP) - The Stitch Store";
+    const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -68,7 +98,7 @@ export const sendOtpEmail = async (to, name, otp) => {
     </html>
   `;
 
-  const text = `
+    const text = `
     Hi ${name},
 
     Your one-time password (OTP) is: ${otp}
@@ -81,5 +111,17 @@ export const sendOtpEmail = async (to, name, otp) => {
     The The Stitch Store
   `;
 
-  await sendEmail(to, subject, text, html);
+    await sendEmail(to, subject, text, html);
+  } catch (error) {
+    console.error("Email Sending Error:", error.message);
+    throw new Error("Failed to send OTP email");
+  }
+};
+
+export const closeRedisConnection = async () => {
+  if (redisClient.isOpen) {
+    await redisClient.quit();
+    isConnected = false;
+    console.log("Redis connection closed");
+  }
 };

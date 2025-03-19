@@ -1,7 +1,7 @@
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import {User} from '../models/user.model.js';
-import { generateAccessAndRefereshTokens } from '../controllers/user.controller.js';
+import { generateAccessAndRefreshTokens } from '../controllers/user.controller.js';
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -13,7 +13,7 @@ passport.use(new GoogleStrategy({
 async (accessToken, refreshToken, profile, done) => {
   try {
     let user = await User.findOne({ googleId: profile.id });
-
+	
     if (!user) {
       user = await User.findOne({ email: profile.emails[0].value });
       
@@ -32,9 +32,8 @@ async (accessToken, refreshToken, profile, done) => {
       }
     }
 
-    const { accessToken: userAccessToken, refreshToken: userRefreshToken } = await generateAccessAndRefereshTokens(user._id);
-
-    return done(null, { user, accessToken: userAccessToken, refreshToken: userRefreshToken });
+    const tokens = await generateAccessAndRefreshTokens(user._id);
+    return done(null, { user, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
   } catch (error) {
     return done(error, false);
   }
