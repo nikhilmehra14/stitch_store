@@ -22,7 +22,7 @@ app.use(helmet({
 
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",")
-  : ["http://localhost:5173", "https://thestitchstore.in"];
+  : ["http://localhost:5173", "https://www.thestitchstore.in"];
 
 
 app.use(cors({
