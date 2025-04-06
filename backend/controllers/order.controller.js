@@ -447,15 +447,18 @@ export const getAllOrders = async (req, res) => {
         $unwind: "$userInfo",
       },
       {
+        $unwind: "$orderItems",
+      },
+      {
         $lookup: {
           from: "products",
           localField: "orderItems.product",
           foreignField: "_id",
-          as: "orderItems.productDetails",
+          as: "productDetails",
         },
       },
       {
-        $unwind: "$orderItems.productDetails",
+        $unwind: "$productDetails",
       },
       {
         $addFields: {
@@ -465,39 +468,39 @@ export const getAllOrders = async (req, res) => {
         },
       },
       {
-        $project: {
-          shippingAddress: 1,
-          "orderItems.productId": "$orderItems.product",
-          "orderItems.productName": "$orderItems.productDetails.product_name",
-          "orderItems.sku": "$orderItems.productDetails.sku",
-          "orderItems.category": "$orderItems.productDetails.category",
-          "orderItems.description": "$orderItems.productDetails.description",
-          "orderItems.price": 1,
-          "orderItems.quantity": 1,
-          "orderItems.totalPrice": 1,
-          "orderItems.imageUrl": {
-            $arrayElemAt: ["$orderItems.productDetails.images", 0],
+        $group: {
+          _id: "$_id",
+          user: { $first: "$userInfo" },
+          shippingAddress: { $first: "$shippingAddress" },
+          orderItems: {
+            $push: {
+              productId: "$orderItems.product",
+              productName: "$productDetails.product_name",
+              sku: "$productDetails.sku",
+              category: "$productDetails.category",
+              description: "$productDetails.description",
+              price: "$orderItems.price",
+              quantity: "$orderItems.quantity",
+              totalPrice: "$orderItems.totalPrice",
+              imageUrl: { $arrayElemAt: ["$productDetails.images", 0] },
+            },
           },
-          user: {
-            userId: "$userInfo._id",
-            email: "$userInfo.email",
-            fullName: "$userInfo.fullName",
-          },
-          totalAmount: {
-            $sum: "$orderItems.totalPrice",
-          },
-          paymentStatus: 1,
-          orderStatus: 1,
-          paymentMethod: 1,
-          currency: 1,
-          createdAt: 1,
-          updatedAt: 1,
+          totalAmount: { $sum: "$orderItems.totalPrice" },
+          paymentStatus: { $first: "$paymentStatus" },
+          orderStatus: { $first: "$orderStatus" },
+          paymentMethod: { $first: "$paymentMethod" },
+          currency: { $first: "$currency" },
+          createdAt: { $first: "$createdAt" },
+          updatedAt: { $first: "$updatedAt" },
         },
       },
       {
         $addFields: {
-          createdAt: { $toDate: "$createdAt" },
-          updatedAt: { $toDate: "$updatedAt" },
+          user: {
+            userId: "$user._id",
+            email: "$user.email",
+            fullName: "$user.fullName",
+          },
         },
       },
       {
@@ -526,6 +529,7 @@ export const getAllOrders = async (req, res) => {
       );
   }
 };
+
 
 export const getUserOrders = async (req, res) => {
   try {
