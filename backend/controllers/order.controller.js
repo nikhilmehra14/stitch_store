@@ -23,7 +23,7 @@ import Coupon from "../models/coupon.model.js";
 
 const ORDER_STATUS = {
   PENDING_PAYMENT: "Pending",
-  PAID: "Paid",
+  COMPLETED: "Completed",
   SHIPPED: "Shipped",
 };
 
@@ -164,7 +164,7 @@ export const createOrder = async (req, res) => {
       status: ORDER_STATUS.PENDING_PAYMENT,
       appliedCoupons: cart.appliedCoupons,
     });
-
+console.log("order: ", order);
     await order.save({ session });
 
     await session.commitTransaction();
@@ -321,8 +321,7 @@ export const confirmOrder = async (req, res) => {
         }
       }
     }
-
-    order.status = ORDER_STATUS.PAID;
+    order.paymentStatus = ORDER_STATUS.COMPLETED;
     order.razorpayPaymentId = razorpayPaymentId;
     order.amountPaid = order.totalAmount;
     await order.save({ session });
@@ -371,21 +370,23 @@ export const confirmOrder = async (req, res) => {
       billing_pincode: order.shippingAddress.zipCode,
       length: 15,
       breadth: 5,
-      height: 20, 
+      height: 20,
       weight: 0.8,
       pickup_location: "Home",
-    };    
+    };
 
     console.log("shiprocket payload: ", shiprocketPayload);
     try {
       const shiprocketOrder = await createShiprocketOrder(shiprocketPayload);
+console.log("shiprocketOrder: ", shiprocketOrder);
       const shippingLabel = await generateShippingLabel(
         shiprocketOrder.shipment_id
       );
+console.log("shippingLable: ", shippingLabel);
 
       order.shiprocketOrderId = shiprocketOrder.order_id;
       order.shippingLabel = shippingLabel.label_url;
-      order.status = ORDER_STATUS.SHIPPED;
+      order.orderStatus = ORDER_STATUS.SHIPPED;
       await order.save();
 
       await sendOrderShippedEmail(order, shiprocketOrder.shipment_id);
@@ -443,12 +444,8 @@ export const getAllOrders = async (req, res) => {
           as: "userInfo",
         },
       },
-      {
-        $unwind: "$userInfo",
-      },
-      {
-        $unwind: "$orderItems",
-      },
+      { $unwind: "$userInfo" },
+
       {
         $lookup: {
           from: "products",
@@ -458,48 +455,84 @@ export const getAllOrders = async (req, res) => {
         },
       },
       {
-        $unwind: "$productDetails",
-      },
-      {
         $addFields: {
-          "orderItems.totalPrice": {
-            $multiply: ["$orderItems.price", "$orderItems.quantity"],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: "$_id",
-          user: { $first: "$userInfo" },
-          shippingAddress: { $first: "$shippingAddress" },
           orderItems: {
-            $push: {
-              productId: "$orderItems.product",
-              productName: "$productDetails.product_name",
-              sku: "$productDetails.sku",
-              category: "$productDetails.category",
-              description: "$productDetails.description",
-              price: "$orderItems.price",
-              quantity: "$orderItems.quantity",
-              totalPrice: "$orderItems.totalPrice",
-              imageUrl: { $arrayElemAt: ["$productDetails.images", 0] },
+            $map: {
+              input: "$orderItems",
+              as: "item",
+              in: {
+                productId: "$$item.product",
+                price: "$$item.price",
+                quantity: "$$item.quantity",
+                totalPrice: { $multiply: ["$$item.price", "$$item.quantity"] },
+                productDetails: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: "$productDetails",
+                        as: "prod",
+                        cond: { $eq: ["$$prod._id", "$$item.product"] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
             },
           },
-          totalAmount: { $sum: "$orderItems.totalPrice" },
-          paymentStatus: { $first: "$paymentStatus" },
-          orderStatus: { $first: "$orderStatus" },
-          paymentMethod: { $first: "$paymentMethod" },
-          currency: { $first: "$currency" },
-          createdAt: { $first: "$createdAt" },
-          updatedAt: { $first: "$updatedAt" },
         },
       },
       {
         $addFields: {
+          totalAmount: {
+            $sum: "$orderItems.totalPrice",
+          },
+        },
+      },
+      {
+        $project: {
+          shippingAddress: 1,
+          orderStatus: 1,
+          paymentStatus: 1,
+          paymentMethod: 1,
+          currency: 1,
+          createdAt: { $toDate: "$createdAt" },
+          updatedAt: { $toDate: "$updatedAt" },
+          totalAmount: 1,
           user: {
-            userId: "$user._id",
-            email: "$user.email",
-            fullName: "$user.fullName",
+            userId: "$userInfo._id",
+            email: "$userInfo.email",
+            fullName: "$userInfo.fullName",
+          },
+          orderItems: {
+            $map: {
+              input: "$orderItems",
+              as: "item",
+              in: {
+                productId: "$$item.productId",
+                price: "$$item.price",
+                quantity: "$$item.quantity",
+                totalPrice: "$$item.totalPrice",
+                productName: "$$item.productDetails.product_name",
+                sku: "$$item.productDetails.sku",
+                category: "$$item.productDetails.category",
+                description: "$$item.productDetails.description",
+                imageUrl: {
+                  $cond: {
+                    if: {
+                      $gt: [
+                        { $size: "$$item.productDetails.images" },
+                        0,
+                      ],
+                    },
+                    then: {
+                      $arrayElemAt: ["$$item.productDetails.images", 0],
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
           },
         },
       },
