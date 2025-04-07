@@ -469,7 +469,7 @@ export const getAllOrders = async (req, res) => {
                   $arrayElemAt: [
                     {
                       $filter: {
-                        input: "$productDetails",
+                        input: { $ifNull: ["$productDetails", []] },
                         as: "prod",
                         cond: { $eq: ["$$prod._id", "$$item.product"] },
                       },
@@ -521,7 +521,7 @@ export const getAllOrders = async (req, res) => {
                   $cond: {
                     if: {
                       $gt: [
-                        { $size: "$$item.productDetails.images" },
+                        { $size: { $ifNull: ["$$item.productDetails.images", []] } },
                         0,
                       ],
                     },
