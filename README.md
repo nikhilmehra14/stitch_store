@@ -63,7 +63,7 @@ stitch_store/
 2. **Set up the Backend**:
    ```bash
    cd backend
-   npm install
+   yarn install
 - Create a .env file in backend.
 - Start the backend:
   ```bash
