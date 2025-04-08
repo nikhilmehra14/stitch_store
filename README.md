@@ -1,8 +1,8 @@
 # Stitch Store
 
-![React](https://img.shields.io/badge/React-v18.x-blue) ![Node.js](https://img.shields.io/badge/Node.js-v18.x-green) ![Express](https://img.shields.io/badge/Express-v4.x-blue) ![License](https://img.shields.io/badge/License-MIT-yellow)
+![React](https://img.shields.io/badge/React-v18.x-blue) ![Node.js](https://img.shields.io/badge/Node.js-v18.x-green) ![Express](https://img.shields.io/badge/Express-v4.x-blue) ![License](https://img.shields.io/badge/License-ISC-yellow)
 
-**Stitch Store** is a full-stack e-commerce platform built to sell bags. It features a responsive React.js frontend for an intuitive user experience and a Node.js/Express backend with RESTful APIs, integrated with Shiprocket for shipping and Razorpay for secure payments.
+**Stitch Store** is a full-stack e-commerce platform built to sell bags, wallets etc. It features a responsive React.js frontend for an intuitive user experience and a Node.js/Express backend with RESTful APIs, integrated with Shiprocket for shipping and Razorpay for secure payments.
 
 ## Table of Contents
 - [Features](#features)
