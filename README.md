@@ -33,6 +33,7 @@
 - **Razorpay API**: Payment processing integration.
 
 ## Project Structure
+```
 stitch_store/
 ├── backend/             # Backend source code
 │   ├── routes/          # API route definitions
@@ -45,7 +46,7 @@ stitch_store/
 │   ├── public/          # Static assets
 │   └── package.json     # Frontend dependencies
 └── README.md            # Project documentation
-
+```
 
 ## Installation
 
